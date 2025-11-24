@@ -7,10 +7,6 @@ import time
 from competitive_sudoku.sudoku import GameState, Move, SudokuBoard, TabooMove
 import competitive_sudoku.sudokuai
 
-# Functions to define:
-#   - legal move checker and other rules should be in def possible()
-#   - compute best move should check for the heuristic score that lets the player choose the best move in the tree (min max tree should be implemented for this)
-
 
 class SudokuAI(competitive_sudoku.sudokuai.SudokuAI):
     """
@@ -19,14 +15,12 @@ class SudokuAI(competitive_sudoku.sudokuai.SudokuAI):
 
     def __init__(self):
         super().__init__()
-
-    # N.B. This is a very naive implementation.
+    
     def compute_best_move(self, game_state: GameState) -> None:
         board = game_state.board
         N = board.N
         taboo = game_state.taboo_moves
 
-        # Allowed squares for this player (None means "all squares allowed")
         allowed = game_state.player_squares()
         if allowed is None:
             allowed = [(i, j) for i in range(N) for j in range(N)]
@@ -62,61 +56,43 @@ class SudokuAI(competitive_sudoku.sudokuai.SudokuAI):
         # ------------------ master legality checker ----------------------
 
         def is_legal_move(i, j, value):
-            # Must be in allowed squares
             if (i, j) not in allowed:
                 return False
-
-            # Must be empty
             if board.get((i, j)) != SudokuBoard.empty:
                 return False
-
-            # Value in range
             if not (1 <= value <= N):
                 return False
-
-            # Not a taboo move
             for t in taboo:
                 if t.square == (i, j) and t.value == value:
                     return False
-
-            # C0: uniqueness rule
             if row_has_value(i, value):
                 return False
             if col_has_value(j, value):
                 return False
             if block_has_value(i, j, value):
                 return False
-
             return True
 
-        # ------------- very simple score function -----------------
+        # ------------------ move score (kept for fallback ordering) ----------------------
 
         def move_score(i, j, value):
-            """
-            Very basic heuristic:
-            prefer moves in rows / columns / blocks that are already "crowded"
-            (i.e., have many filled cells). Idea: this tends to complete
-            regions faster and should give points more often than random play.
-            """
             score = 0
 
-            # count filled cells in the row (including this move)
+            # row
             for col in range(N):
                 if col == j:
-                    score += 1  # the move itself
+                    score += 1
                 elif board.get((i, col)) != SudokuBoard.empty:
                     score += 1
 
-            # count filled cells in the column
+            # column
             for row in range(N):
                 if row == i:
-                    continue  # already counted this cell in the row loop
-                if row == i and j == j:
-                    score += 1
-                elif board.get((row, j)) != SudokuBoard.empty:
+                    continue
+                if board.get((row, j)) != SudokuBoard.empty:
                     score += 1
 
-            # count filled cells in the block
+            # block
             m = board.region_height()
             n = board.region_width()
             bi = (i // m) * m
@@ -124,10 +100,9 @@ class SudokuAI(competitive_sudoku.sudokuai.SudokuAI):
             for r in range(bi, bi + m):
                 for c in range(bj, bj + n):
                     if r == i and c == j:
-                        score += 1  # the move itself
+                        score += 1
                     elif board.get((r, c)) != SudokuBoard.empty:
                         score += 1
-
             return score
 
         # ---------------- collect all legal moves -----------------
@@ -140,29 +115,108 @@ class SudokuAI(competitive_sudoku.sudokuai.SudokuAI):
                 if is_legal_move(i, j, value):
                     legal_moves.append((i, j, value))
 
-        # No move available -> propose nothing (opponent wins)
         if not legal_moves:
             return
 
-        # ------------- pick the move with highest score -------------
+        # ---------------- STATE CLONE + APPLY -----------------
 
-        best_score = None
-        best_moves = []
+        import copy
+        def apply_move_to_state(gs, mv):
+            (ri, rj, rv) = mv
+            child = copy.deepcopy(gs)
+            child.board.put((ri, rj), rv)
+            child.moves.append(Move((ri, rj), rv))
+            child.current_player = 3 - gs.current_player
+            return child
 
-        for (i, j, value) in legal_moves:
-            s = move_score(i, j, value)
-            if best_score is None or s > best_score:
-                best_score = s
-                best_moves = [(i, j, value)]
-            elif s == best_score:
-                best_moves.append((i, j, value))
+        # ---------------- EVALUATION FUNCTION -----------------
 
-        # break ties randomly among best-scoring moves
-        i, j, value = random.choice(best_moves)
-        move = Move((i, j), value)
-        self.propose_move(move)
+        def evaluate(gs):
+            filled = sum(1 for r in range(N) for c in range(N)
+                        if gs.board.get((r, c)) != SudokuBoard.empty)
+            score_diff = gs.scores[game_state.current_player - 1] - gs.scores[2 - game_state.current_player]
+            return filled * 0.01 + score_diff
 
-        # Keep proposing the same move until the time limit is reached.
+        # ---------------- ALPHA-BETA SEARCH -----------------
+
+        import time
+        start_time = time.time()
+        TIME_LIMIT = 0.45
+
+        def alpha_beta(gs, depth, alpha, beta, maximizing):
+            if time.time() - start_time > TIME_LIMIT:
+                raise TimeoutError
+
+            # terminal if no moves
+            next_moves = []
+            allowed_local = gs.player_squares()
+            if allowed_local is None:
+                allowed_local = [(i, j) for i in range(N) for j in range(N)]
+
+            for (i, j) in allowed_local:
+                if gs.board.get((i, j)) != SudokuBoard.empty:
+                    continue
+                for v in range(1, N + 1):
+                    if is_legal_move(i, j, v):
+                        next_moves.append((i, j, v))
+
+            if depth == 0 or not next_moves:
+                return evaluate(gs), None
+
+            best_move = None
+
+            if maximizing:
+                value = -float("inf")
+                # ordered for better pruning
+                next_moves.sort(key=lambda mv: move_score(*mv), reverse=True)
+
+                for mv in next_moves:
+                    child = apply_move_to_state(gs, mv)
+                    score, _ = alpha_beta(child, depth - 1, alpha, beta, False)
+                    if score > value:
+                        value = score
+                        best_move = mv
+                    alpha = max(alpha, value)
+                    if alpha >= beta:
+                        break
+                return value, best_move
+
+            else:
+                value = float("inf")
+                next_moves.sort(key=lambda mv: move_score(*mv))
+
+                for mv in next_moves:
+                    child = apply_move_to_state(gs, mv)
+                    score, _ = alpha_beta(child, depth - 1, alpha, beta, True)
+                    if score < value:
+                        value = score
+                        best_move = mv
+                    beta = min(beta, value)
+                    if alpha >= beta:
+                        break
+                return value, best_move
+
+        # ---------------- ITERATIVE DEEPENING -----------------
+
+        best_move = random.choice(legal_moves)
+        self.propose_move(Move((best_move[0], best_move[1]), best_move[2]))
+
+        depth = 1
+        while True:
+            try:
+                if time.time() - start_time > TIME_LIMIT:
+                    break
+                score, mv = alpha_beta(game_state, depth, -float("inf"), float("inf"), True)
+                if mv is not None:
+                    best_move = mv
+                    self.propose_move(Move((mv[0], mv[1]), mv[2]))
+            except TimeoutError:
+                break
+            depth += 1
+
+        # ---------------- KEEP PROPOSING SAME MOVE -----------------
+
+        final_move = Move((best_move[0], best_move[1]), best_move[2])
         while True:
             time.sleep(0.1)
-            self.propose_move(move)
+            self.propose_move(final_move)
