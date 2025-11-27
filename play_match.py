@@ -48,7 +48,7 @@ def play_match(player: str, opponent: str, count: int, board_file: str, calculat
 
 
 def main():
-    multiprocessing.set_start_method('fork')
+    # multiprocessing.set_start_method('fork')
     cmdline_parser = argparse.ArgumentParser(description='Play a match between two sudoku players.')
     cmdline_parser.add_argument('first', help="The module name of the first player's SudokuAI class (default: random_player)", default='random_player', nargs='?')
     cmdline_parser.add_argument('second', help="The module name of the second player's SudokuAI class (default: random_player)", default='random_player', nargs='?')
