@@ -1,0 +1,11 @@
+team29_A1 - greedy_player 0-1
+
+greedy_player - team29_A1 0-1
+
+team29_A1 - greedy_player 0-1
+
+greedy_player - team29_A1 0-1
+
+team29_A1 - greedy_player 0-1
+
+Match result: team29_A1 - greedy_player 2-3
